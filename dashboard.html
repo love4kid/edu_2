@@ -84,7 +84,7 @@ tailwind.config = {
     <!-- TopAppBar -->
     <header class="flex justify-between items-center h-16 px-margin-page w-full bg-surface border-b border-border-neutral z-40 shrink-0">
       <h1 class="text-[18px] font-bold text-primary">INVENI 그룹 통합 기업현황</h1>
-      <div class="flex items-center gap-6">
+      <div id="topbar-authed" class="hidden items-center gap-6">
         <div class="flex items-center gap-2 text-secondary text-[13px]">
           <span class="material-symbols-outlined text-[18px]" id="asof-icon">schedule</span>
           <span id="asof-label">Data as of —</span>
@@ -93,12 +93,13 @@ tailwind.config = {
           <span class="material-symbols-outlined text-[14px]">refresh</span> 새로고침
         </button>
         <div class="flex items-center gap-3">
-          <span class="w-8 h-8 bg-primary-container flex items-center justify-center text-white text-[12px] font-bold">PM</span>
+          <span class="w-8 h-8 bg-primary-container flex items-center justify-center text-white text-[12px] font-bold" id="user-avatar">PM</span>
           <div class="flex flex-col leading-none">
-            <span class="text-xs font-bold text-primary">Planning Manager</span>
-            <span class="text-[10px] text-secondary">ITC팀</span>
+            <span class="text-xs font-bold text-primary" id="user-name-label">Planning Manager</span>
+            <span class="text-[10px] text-secondary" id="user-id-label">ITC팀</span>
           </div>
         </div>
+        <button id="logout-btn" class="text-[11px] font-bold text-secondary border border-border-neutral px-2 py-1 hover:bg-surface-container-high">로그아웃</button>
       </div>
     </header>
 
@@ -108,8 +109,34 @@ tailwind.config = {
       <!-- P1: Corporate Cards -->
       <section id="p1-cards" class="grid grid-cols-5 gap-gutter-grid shrink-0"></section>
 
-      <!-- Bottom: P2 + P3 -->
-      <div class="flex-1 flex gap-gutter-grid min-h-0">
+      <!-- Auth Panel: shown when logged out (login/signup only, 계열사 목록(P1)은 위에 항상 노출) -->
+      <div id="auth-panel" class="flex-1 flex items-center justify-center min-h-0">
+        <div class="w-[360px] bg-white border border-border-neutral p-6">
+          <div class="flex border border-border-neutral mb-5">
+            <button type="button" data-tab="login" class="auth-tab flex-1 py-2 text-[12px] font-bold bg-primary text-white">로그인</button>
+            <button type="button" data-tab="signup" class="auth-tab flex-1 py-2 text-[12px] font-bold bg-white text-primary border-l border-border-neutral">회원가입</button>
+          </div>
+
+          <form id="login-form" class="flex flex-col gap-3">
+            <input name="employee_id" required placeholder="사번" class="border border-border-neutral px-3 py-2 text-[13px]">
+            <input name="name" required placeholder="이름" class="border border-border-neutral px-3 py-2 text-[13px]">
+            <p id="login-error" class="text-[11px] text-status-increase min-h-[14px]"></p>
+            <button type="submit" class="bg-primary text-white text-[13px] font-bold py-2">로그인</button>
+          </form>
+
+          <form id="signup-form" class="hidden flex-col gap-3">
+            <input name="employee_id" required placeholder="사번" class="border border-border-neutral px-3 py-2 text-[13px]">
+            <input name="name" required placeholder="이름" class="border border-border-neutral px-3 py-2 text-[13px]">
+            <input name="phone" required placeholder="연락처 (010-0000-0000)" class="border border-border-neutral px-3 py-2 text-[13px]">
+            <p id="signup-error" class="text-[11px] text-status-increase min-h-[14px]"></p>
+            <button type="submit" class="bg-primary text-white text-[13px] font-bold py-2">회원가입</button>
+          </form>
+          <p id="auth-notice" class="text-[11px] text-secondary mt-3 text-center min-h-[14px]"></p>
+        </div>
+      </div>
+
+      <!-- Bottom: P2 + P3 (로그인 후에만 노출) -->
+      <div id="protected-content" class="hidden flex-1 gap-gutter-grid min-h-0">
 
         <!-- P2 -->
         <div class="flex-1 flex flex-col gap-gutter-grid min-w-0">
@@ -179,7 +206,113 @@ tailwind.config = {
     </main>
   </div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
+// ============ 0) Supabase 연동: 사번 기반 자체 로그인/회원가입 ============
+// 비밀번호 없이 사번+이름 일치로 로그인하는 사내용 간이 인증이며, users 테이블 RLS를
+// anon insert/select 모두 허용하는 단순 오픈 정책으로 구성했습니다(합의된 설계).
+const SUPABASE_URL = "https://aopczyfntgvdcmroftzs.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFvcGN6eWZudGd2ZGNtcm9mdHpzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ3MTM5NTgsImV4cCI6MjEwMDI4OTk1OH0.Fmz6tucZ_3_c5c3J9avmRKzGbfTVLLrZkSGb4duG080";
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+const authPanel = document.getElementById('auth-panel');
+const protectedContent = document.getElementById('protected-content');
+const topbarAuthed = document.getElementById('topbar-authed');
+const loginForm = document.getElementById('login-form');
+const signupForm = document.getElementById('signup-form');
+const loginError = document.getElementById('login-error');
+const signupError = document.getElementById('signup-error');
+const authNotice = document.getElementById('auth-notice');
+
+function showAuthed(show) {
+  authPanel.classList.toggle('hidden', show);
+  protectedContent.classList.toggle('hidden', !show);
+  protectedContent.classList.toggle('flex', show);
+  topbarAuthed.classList.toggle('hidden', !show);
+  topbarAuthed.classList.toggle('flex', show);
+}
+
+function applyUser(user) {
+  document.getElementById('user-name-label').textContent = user.name;
+  document.getElementById('user-id-label').textContent = user.employee_id;
+  document.getElementById('user-avatar').textContent = user.name.slice(0, 1);
+  showAuthed(true);
+}
+
+const savedUser = sessionStorage.getItem('inveni_user');
+if (savedUser) applyUser(JSON.parse(savedUser));
+
+document.querySelectorAll('.auth-tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const tab = btn.dataset.tab;
+    document.querySelectorAll('.auth-tab').forEach(b => {
+      const active = b.dataset.tab === tab;
+      b.classList.toggle('bg-primary', active);
+      b.classList.toggle('text-white', active);
+      b.classList.toggle('bg-white', !active);
+      b.classList.toggle('text-primary', !active);
+    });
+    loginForm.classList.toggle('hidden', tab !== 'login');
+    loginForm.classList.toggle('flex', tab === 'login');
+    signupForm.classList.toggle('hidden', tab !== 'signup');
+    signupForm.classList.toggle('flex', tab === 'signup');
+    loginError.textContent = '';
+    signupError.textContent = '';
+    authNotice.textContent = '';
+  });
+});
+
+signupForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  signupError.textContent = '';
+  const employee_id = signupForm.employee_id.value.trim();
+  const name = signupForm.name.value.trim();
+  const phone = signupForm.phone.value.trim();
+  const submitBtn = signupForm.querySelector('button[type=submit]');
+  submitBtn.disabled = true;
+  const { error } = await sb.from('users').insert({ employee_id, name, phone });
+  submitBtn.disabled = false;
+  if (error) {
+    signupError.textContent = error.code === '23505'
+      ? '이미 등록된 사번입니다.'
+      : `회원가입에 실패했습니다. (${error.message})`;
+    return;
+  }
+  signupForm.reset();
+  loginForm.employee_id.value = employee_id;
+  loginForm.name.value = name;
+  document.querySelector('.auth-tab[data-tab="login"]').click();
+  authNotice.textContent = '회원가입이 완료되었습니다. 로그인해주세요.';
+});
+
+loginForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  loginError.textContent = '';
+  const employee_id = loginForm.employee_id.value.trim();
+  const name = loginForm.name.value.trim();
+  const submitBtn = loginForm.querySelector('button[type=submit]');
+  submitBtn.disabled = true;
+  const { data, error } = await sb.from('users')
+    .select('employee_id,name')
+    .eq('employee_id', employee_id)
+    .eq('name', name)
+    .maybeSingle();
+  submitBtn.disabled = false;
+  if (error || !data) {
+    loginError.textContent = '사번 또는 이름이 일치하지 않습니다.';
+    return;
+  }
+  await sb.from('login_history').insert({ employee_id, name });
+  sessionStorage.setItem('inveni_user', JSON.stringify(data));
+  loginForm.reset();
+  applyUser(data);
+});
+
+document.getElementById('logout-btn').addEventListener('click', () => {
+  sessionStorage.removeItem('inveni_user');
+  showAuthed(false);
+});
+
 // ============ 1) 5개사 실데이터: KRX 정보데이터시스템 Open API 종가(2026.07.22) 기준 ============
 const COMPANIES = [
   { name:"LS ELECTRIC", ticker:"010120", market:"KOSPI", biz:"전력기기·전력인프라·자동화 솔루션", cap:"28.59조", price:190600, chg:0.79, color:"#A5C8ED" },
