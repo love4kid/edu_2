@@ -1,0 +1,14 @@
+# secrets
+.env
+
+# 실제 API 키가 포함된 로컬 프롬프트 기록 (레포에는 올리지 않음)
+설계도 대로 대시보드 만들기 프롬프트.txt
+supabase 회원가입 로그인 기능 붙이기 프롬프트.txt
+
+# node
+node_modules/
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
