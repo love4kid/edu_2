@@ -438,10 +438,12 @@ NEWS.forEach(n => {
   newsList.appendChild(item);
 });
 
-// ============ 5) 실시간 자동 갱신: 로컬 프록시 서버(server.js)에서 최신 데이터 수신 ============
-// server.js를 실행해 http://localhost:8787 로 이 페이지를 열면, 브라우저 대신 서버가 KRX/DART를
-// 호출해 최신 데이터를 /api/summary로 내려줍니다. server.js 없이 이 파일을 그냥 열면(file://) 이
-// 구간은 실패하고 위의 정적 실데이터(2026.07.22 KRX 종가 / DART 2026 1분기 기준)가 계속 표시됩니다.
+// ============ 5) 자동 갱신: GitHub Actions가 주기적으로 갱신하는 정적 JSON(data/summary.json) ============
+// scripts/fetch-data.js가 GitHub Actions 스케줄에 따라 KRX/DART를 서버사이드로 호출해
+// data/summary.json을 커밋합니다. 이 페이지는 그 정적 파일만 읽으므로 항상 상대경로
+// 'data/summary.json'로 접근 가능한 곳에서 열어야 합니다(GitHub Pages, 또는 로컬 정적 서버).
+// file://로 직접 열면 브라우저가 로컬 파일 fetch를 차단할 수 있어 이 구간은 실패하고,
+// 아래의 정적 폴백 실데이터(2026.07.22 KRX 종가 / DART 2026 1분기 기준)가 표시됩니다.
 const REPRT_LABEL = { "11013": "1분기", "11012": "반기(2Q 누계)", "11014": "3분기(누계)", "11011": "사업보고서(연간)" };
 const fmtMktCap = krw => {
   const v = Number(krw);
@@ -460,7 +462,7 @@ function applySummary(summary) {
     renderAllCards();
     const bd = summary.latest.date;
     document.getElementById('asof-label').textContent =
-      `Data as of ${bd.slice(0,4)}.${bd.slice(4,6)}.${bd.slice(6,8)} 종가 · 자동 갱신 중 (마지막 확인 ${new Date(summary.generatedAt).toLocaleTimeString('ko-KR')})`;
+      `Data as of ${bd.slice(0,4)}.${bd.slice(4,6)}.${bd.slice(6,8)} 종가 · GitHub Actions 자동 갱신 (마지막 확인 ${new Date(summary.generatedAt).toLocaleTimeString('ko-KR')})`;
   }
   if (summary.series) {
     ["1M", "3M", "1Y"].forEach(p => { if (summary.series[p]) REAL_SERIES[p] = summary.series[p]; });
@@ -482,7 +484,8 @@ async function loadLive(manual = false) {
   const btn = document.getElementById('refresh-btn');
   if (manual) btn.querySelector('.material-symbols-outlined').classList.add('animate-spin');
   try {
-    const res = await fetch(manual ? '/api/refresh' : '/api/summary', { cache: 'no-store' });
+    // 캐시 버스팅: 매번 최신 커밋된 JSON을 받도록 타임스탬프 쿼리 추가
+    const res = await fetch(`data/summary.json?t=${Date.now()}`, { cache: 'no-store' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const summary = await res.json();
     applySummary(summary);
@@ -490,9 +493,9 @@ async function loadLive(manual = false) {
   } catch (err) {
     if (!liveConnected) {
       document.getElementById('asof-label').textContent =
-        "Data as of 2026.07.22 종가 (정적 스냅샷 — 자동 갱신 서버 미연결: 로컬에서 server.js 실행 시 실시간 갱신)";
+        "Data as of 2026.07.22 종가 (정적 폴백 — data/summary.json을 읽지 못했습니다: GitHub Pages 등 정적 서버에서 열어주세요)";
     }
-    console.warn("[live] /api/summary 연결 실패 — 정적 데이터 유지:", err.message);
+    console.warn("[live] data/summary.json 로드 실패 — 정적 데이터 유지:", err.message);
   } finally {
     if (manual) btn.querySelector('.material-symbols-outlined').classList.remove('animate-spin');
   }
@@ -500,7 +503,7 @@ async function loadLive(manual = false) {
 
 document.getElementById('refresh-btn').addEventListener('click', () => loadLive(true));
 loadLive();
-setInterval(() => loadLive(false), 5 * 60 * 1000); // 5분마다 자동 갱신
+setInterval(() => loadLive(false), 5 * 60 * 1000); // 5분마다 최신 JSON 재확인
 </script>
 </body>
 </html>

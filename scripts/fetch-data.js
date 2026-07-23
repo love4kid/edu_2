@@ -1,17 +1,14 @@
-// INVENI 그룹 통합 기업현황 대시보드 — 로컬 프록시 서버
+// INVENI 그룹 통합 기업현황 대시보드 — 데이터 수집 스크립트
 //
-// 브라우저는 KRX Open API를 직접 호출할 수 없습니다 (KRX 서버가 CORS preflight에도
-// AUTH_KEY 인증을 요구하는데, 브라우저는 preflight에 실제 헤더값을 담아 보내지 않으므로
-// 항상 401로 거부됩니다). 그래서 이 서버가 대신 KRX·DART를 호출해 결과를 캐시해두고,
-// dashboard.html은 같은 출처(origin)인 이 서버의 /api/summary만 호출합니다.
+// GitHub Actions가 주기적으로 이 스크립트를 실행해 KRX/DART에서 최신 데이터를 가져오고
+// data/summary.json으로 저장합니다. dashboard.html은 그 정적 JSON 파일만 읽습니다
+// (브라우저가 KRX/DART를 직접 호출할 수 없는 이유는 README 참고).
 //
-// 실행법: .env 파일에 KRX_AUTH_KEY / DART_KEY 설정 후 node server.js  →  http://localhost:8787
+// 로컬 실행법: .env 파일에 KRX_AUTH_KEY / DART_KEY 설정 후 `node scripts/fetch-data.js`
 "use strict";
-const http = require("http");
 const fs = require("fs");
 const path = require("path");
 
-// 별도 패키지 없이 .env 파일을 읽어 process.env에 채워넣는 최소 로더
 function loadEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return;
   for (const line of fs.readFileSync(filePath, "utf-8").split("\n")) {
@@ -27,13 +24,12 @@ function loadEnvFile(filePath) {
     if (!(key in process.env)) process.env[key] = value;
   }
 }
-loadEnvFile(path.join(__dirname, ".env"));
+loadEnvFile(path.join(__dirname, "..", ".env"));
 
-const PORT = Number(process.env.PORT) || 8787;
 const KRX_AUTH_KEY = process.env.KRX_AUTH_KEY;
 const DART_KEY = process.env.DART_KEY;
 if (!KRX_AUTH_KEY || !DART_KEY) {
-  console.error("KRX_AUTH_KEY / DART_KEY가 설정되지 않았습니다. .env 파일을 만들고 값을 채워주세요 (.env.example 참고).");
+  console.error("KRX_AUTH_KEY / DART_KEY가 설정되지 않았습니다. .env 파일(로컬) 또는 GitHub Actions Secrets를 확인하세요.");
   process.exit(1);
 }
 const KRX_KOSPI = "https://data-dbg.krx.co.kr/svc/apis/sto/stk_bydd_trd";
@@ -47,11 +43,6 @@ const COMPANIES = [
   { name: "인베니", ticker: "015360", market: "KOSPI", biz: "도시가스(예스코)·투자전문 지주회사", color: "#FFCCBC", corpCode: "00105101" },
 ];
 const TICKER_SET = new Set(COMPANIES.map(c => c.ticker));
-
-// ---------- 캐시 ----------
-const TTL = { latest: 5 * 60 * 1000, series: 6 * 60 * 60 * 1000, fin: 6 * 60 * 60 * 1000 };
-const cache = { latest: null, series: null, fin: null };
-const fresh = (entry, ttl) => entry && Date.now() - entry.ts < ttl;
 
 // ---------- KRX ----------
 const fmtBasDd = d => `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
@@ -81,13 +72,6 @@ async function findTradingSnapshot(target, maxLookback = 8) {
     d.setDate(d.getDate() - 1);
   }
   return null;
-}
-
-async function getLatest() {
-  if (fresh(cache.latest, TTL.latest)) return cache.latest.data;
-  const snap = await findTradingSnapshot(new Date());
-  cache.latest = { data: snap, ts: Date.now() };
-  return snap;
 }
 
 // 액면분할 등 비연속 구간 자동 감지 & 수정주가 환산
@@ -130,17 +114,18 @@ async function fetchSeriesForPeriod(anchor, stepDays, count) {
   }));
 }
 
+async function getLatest() {
+  return findTradingSnapshot(new Date());
+}
+
 async function getSeries() {
-  if (fresh(cache.series, TTL.series)) return cache.series.data;
   const anchor = new Date();
   const [oneM, threeM, oneY] = await Promise.all([
     fetchSeriesForPeriod(anchor, 4, 9),
     fetchSeriesForPeriod(anchor, 13, 8),
     fetchSeriesForPeriod(anchor, 31, 13),
   ]);
-  const data = { "1M": oneM, "3M": threeM, "1Y": oneY };
-  cache.series = { data, ts: Date.now() };
-  return data;
+  return { "1M": oneM, "3M": threeM, "1Y": oneY };
 }
 
 // ---------- DART ----------
@@ -185,62 +170,30 @@ async function fetchCompanyFinancial(corpCode) {
 }
 
 async function getFinancials() {
-  if (fresh(cache.fin, TTL.fin)) return cache.fin.data;
-  const data = await Promise.all(COMPANIES.map(c => fetchCompanyFinancial(c.corpCode)));
-  cache.fin = { data, ts: Date.now() };
-  return data;
+  return Promise.all(COMPANIES.map(c => fetchCompanyFinancial(c.corpCode)));
 }
 
-// ---------- HTTP 서버 ----------
-async function buildSummary() {
+// ---------- 실행 ----------
+async function main() {
+  console.log("KRX/DART 데이터 수집 시작...");
   const [latest, series, fin] = await Promise.all([getLatest(), getSeries(), getFinancials()]);
-  return {
+  const summary = {
     generatedAt: new Date().toISOString(),
     companies: COMPANIES.map(({ corpCode, ...c }) => c),
     latest, series, fin,
   };
+
+  const outDir = path.join(__dirname, "..", "data");
+  fs.mkdirSync(outDir, { recursive: true });
+  fs.writeFileSync(path.join(outDir, "summary.json"), JSON.stringify(summary, null, 2));
+
+  console.log("완료:", path.join(outDir, "summary.json"));
+  console.log("latest.date:", latest && latest.date);
+  console.log("series points:", Object.fromEntries(Object.entries(series).map(([k, v]) => [k, v ? v.length : 0])));
+  console.log("fin ok:", fin.filter(Boolean).length, "/", fin.length);
 }
 
-const server = http.createServer(async (req, res) => {
-  try {
-    const url = new URL(req.url, `http://localhost:${PORT}`);
-
-    if (url.pathname === "/" || url.pathname === "/dashboard.html") {
-      const html = fs.readFileSync(path.join(__dirname, "dashboard.html"));
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      return res.end(html);
-    }
-
-    if (url.pathname === "/api/summary") {
-      const summary = await buildSummary();
-      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-      return res.end(JSON.stringify(summary));
-    }
-
-    if (url.pathname === "/api/refresh") {
-      cache.latest = null; cache.series = null; cache.fin = null;
-      const summary = await buildSummary();
-      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
-      return res.end(JSON.stringify(summary));
-    }
-
-    res.writeHead(404, { "Content-Type": "text/plain" });
-    res.end("Not found");
-  } catch (err) {
-    console.error(err);
-    res.writeHead(500, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: err.message }));
-  }
+main().catch(err => {
+  console.error("데이터 수집 실패:", err);
+  process.exit(1);
 });
-
-server.listen(PORT, () => {
-  console.log(`INVENI 대시보드 서버 실행 중: http://localhost:${PORT}`);
-  console.log("데이터를 미리 가져오는 중... (최초 1회는 다소 시간이 걸릴 수 있습니다)");
-  buildSummary()
-    .then(() => console.log("초기 데이터 준비 완료."))
-    .catch(e => console.warn("초기 데이터 준비 중 일부 실패(요청 시 재시도됩니다):", e.message));
-});
-
-// 서버가 켜져 있는 동안 주기적으로 캐시를 갱신 (자동 갱신)
-setInterval(() => { cache.latest = null; getLatest().catch(() => {}); }, TTL.latest);
-setInterval(() => { cache.fin = null; getFinancials().catch(() => {}); }, TTL.fin);
