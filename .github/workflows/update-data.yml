@@ -2,7 +2,8 @@ name: Update dashboard data
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    # 07:00 UTC = 16:00 KST (평일만) — 코스피 종가 확정 이후 하루 1회 갱신
+    - cron: "0 7 * * 1-5"
   workflow_dispatch: {}
 
 permissions:
