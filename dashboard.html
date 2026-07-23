@@ -490,7 +490,7 @@ async function loadLive(manual = false) {
   } catch (err) {
     if (!liveConnected) {
       document.getElementById('asof-label').textContent =
-        "Data as of 2026.07.22 종가 (정적 스냅샷 — server.js 미실행: 자동 갱신 안 됨)";
+        "Data as of 2026.07.22 종가 (정적 스냅샷 — 자동 갱신 서버 미연결: 로컬에서 server.js 실행 시 실시간 갱신)";
     }
     console.warn("[live] /api/summary 연결 실패 — 정적 데이터 유지:", err.message);
   } finally {
